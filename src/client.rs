@@ -143,8 +143,8 @@ fn connect_to_some(addrs: &[SocketAddr], uri: &Uri) -> Result<TcpStream> {
 /// in non-blocking algorithms or for use with TLS libraries other than `native_tls` or `rustls`.
 pub fn uri_mode(uri: &Uri) -> Result<Mode> {
     match uri.scheme_str() {
-        Some("ws") => Ok(Mode::Plain),
-        Some("wss") => Ok(Mode::Tls),
+        Some("ws") | Some("http") => Ok(Mode::Plain),
+        Some("wss") | Some("https") => Ok(Mode::Tls),
         _ => Err(Error::Url(UrlError::UnsupportedUrlScheme)),
     }
 }
