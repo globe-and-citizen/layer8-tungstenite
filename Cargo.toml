@@ -51,6 +51,8 @@ utf-8 = "0.7.5"
 getrandom = { version = "0.2", features = ["js"] }
 layer8-primitives = { git = "https://github.com/globe-and-citizen/layer8-primitives-rs", branch = "osoro/upd/layer8-on-websockets" }
 
+[package.metadata.cargo-machete]
+ignored = ["getrandom"] # Need the "js" flag for wasm builds
 
 [dependencies.native-tls-crate]
 optional = true

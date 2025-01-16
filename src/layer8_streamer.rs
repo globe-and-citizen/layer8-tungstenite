@@ -72,33 +72,44 @@ impl<Stream: Read + Write> Layer8Stream<Stream> {
     // that were read from the stream and decrypted.
     #[inline]
     fn common_read(&mut self, buf: &mut [u8]) -> std::io::Result<(usize, usize)> {
-        let mut buf_ = Vec::new();
-        let encrypted_read_len = self.stream.read_to_end(&mut buf_)?;
+        let encrypted_read_len = self.stream.read(buf)?;
         if encrypted_read_len == 0 {
             return Ok((0, 0));
         }
 
-        let data_decrypted = RoundtripEnvelope::from_json_bytes(&buf_)
-            .map_err(|e| {
-                Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "Failed to parse json response: {}\n Body is: {}",
-                        e,
-                        String::from_utf8_lossy(&buf_)
-                    ),
-                )
+        let data_decrypted = {
+            let envelope_data = RoundtripEnvelope::from_json_bytes(&buf)
+                .map_err(|e| {
+                    Error::new(
+                        std::io::ErrorKind::Other,
+                        format!(
+                            "Failed to parse json response: {}\n Body is: {}",
+                            e,
+                            String::from_utf8_lossy(&buf)
+                        ),
+                    )
+                })?
+                .decode()
+                .map_err(|e| {
+                    Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to decode response: {}", e),
+                    )
+                })?;
+
+            self.shared_secret.symmetric_decrypt(&envelope_data).map_err(|e| {
+                Error::new(std::io::ErrorKind::Other, format!("Failed to decrypt response: {}", e))
             })?
-            .decode()
-            .map_err(|e| {
-                Error::new(std::io::ErrorKind::Other, format!("Failed to decode response: {}", e))
-            })?;
+        };
 
-        let mut temp_reader = std::io::Cursor::new(data_decrypted);
-        io::copy(&mut temp_reader, &mut self.stream)?;
-        temp_reader.seek(SeekFrom::Start(0))?;
+        println!("data decrypted: \n{:?}", String::from_utf8_lossy(&data_decrypted));
 
-        let read_len = self.stream.read(buf)?;
+        let mut reader = std::io::Cursor::new(data_decrypted);
+        let read_len = reader.read(buf)?;
+        if read_len == 0 {
+            return Ok((0, 0));
+        }
+
         Ok((encrypted_read_len, read_len))
     }
 }
@@ -154,7 +165,7 @@ impl<Stream: Read + Write + Seek> Seek for Layer8Stream<Stream> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::{Read, Seek, SeekFrom, Write};
 
     use layer8_primitives::crypto::{generate_key_pair, KeyUse};
 
@@ -176,7 +187,8 @@ mod tests {
         assert_eq!(reported_written, payload.len());
 
         // read test
-        let mut buf = vec![0u8; stream.written_len];
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let mut buf = vec![0u8; stream.written_len]; // This information is provided by the websocket header in actual implementation.
         let reported_read = stream.read(&mut buf).unwrap();
 
         // we expect the stream to have data to read from and it should be the same as the payload
@@ -187,7 +199,9 @@ mod tests {
             reported_read
         );
 
-        // // assert the payload is the same as the read data
-        assert_eq!(payload, buf.as_slice());
+        println!("buf: {:?}", String::from_utf8_lossy(&buf[..reported_read]));
+
+        // assert the payload is the same as the read data
+        assert_eq!(payload, &buf[..reported_read]);
     }
 }
