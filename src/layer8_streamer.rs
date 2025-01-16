@@ -1,52 +1,56 @@
-use std::io::Error;
-use std::{io::Read, io::Write};
+use std::io::{self, Error, Read, Seek, SeekFrom, Write};
 
 use layer8_primitives::crypto::Jwk;
 use layer8_primitives::types::RoundtripEnvelope;
 
 /// This stream provides an indirection over the actual provided stream implementation. With the indirection we are able
 /// to plug in custom logic for our layer8 needs.
+///
+/// Note: The writes and reads count reported are the unencrypted and decrypted message payloads.
 #[derive(Debug)]
-pub struct Layer8Stream<Stream: Read + Write> {
+pub struct Layer8Stream<Stream> {
     stream: Stream,
     shared_secret: Jwk,
+    // TODO: cleanup/gardening work for better debug code @Osoro
+    // The websockets spec keeps track of the number of bytes written to the stream and is well formed at the header level.
+    // In our case we have this naive marker for debug purposes.
+    //
+    // The tests assume no other writes are made, starts at pos 0.
+    #[cfg(debug_assertions)]
+    written_len: usize,
+    #[cfg(debug_assertions)]
+    read_len: usize,
 }
 
+#[cfg(not(debug_assertions))]
 impl<Stream: Read + Write> Layer8Stream<Stream> {
-    /// Create a new Layer8Stream object.
     pub fn new(stream: Stream, shared_secret: Jwk) -> Self {
         Layer8Stream { stream, shared_secret }
     }
 }
 
-impl<Stream: Read + Write> Read for Layer8Stream<Stream> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let data_read = Vec::new();
-        if data_read.is_empty() {
-            return Ok(0);
-        }
-
-        let data_decrypted =
-            RoundtripEnvelope::encode(&self.shared_secret.symmetric_decrypt(&data_read).map_err(
-                |e| Error::new(std::io::ErrorKind::Other, format!("Failed to decrypt data: {}", e)),
-            )?)
-            .to_json_bytes();
-
-        // unsafe copy
-        buf.copy_from_slice(&data_decrypted);
-        return Ok(data_decrypted.len());
+#[cfg(debug_assertions)]
+impl<Stream: Read + Write + Seek> Layer8Stream<Stream> {
+    fn new_with_seekable(stream: Stream, shared_secret: Jwk) -> Self {
+        Layer8Stream { stream, shared_secret, written_len: 0, read_len: 0 }
     }
 }
 
-impl<Stream: Read + Write> Write for Layer8Stream<Stream> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+impl<Stream: Read + Write> Layer8Stream<Stream> {
+    // This method is an indirection that implements the Read trait for the Layer8Stream.
+    // the output is the number of bytes we should report to the caller and the number of actual bytes written
+    // that were encrypted and written to the stream.
+    #[inline]
+    fn common_write(&mut self, buf: &[u8]) -> io::Result<(usize, usize)> {
         if buf.is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
 
-        let data_encrypted = self.shared_secret.symmetric_encrypt(&buf).map_err(|e| {
-            Error::new(std::io::ErrorKind::Other, format!("Failed to encrypt data: {}", e))
-        })?;
+        let data_encrypted =
+            RoundtripEnvelope::encode(&self.shared_secret.symmetric_encrypt(&buf).map_err(
+                |e| Error::new(std::io::ErrorKind::Other, format!("Failed to encrypt data: {}", e)),
+            )?)
+            .to_json_bytes();
 
         let encrypted_written = self.stream.write(&data_encrypted)?;
         if encrypted_written.ne(&data_encrypted.len()) {
@@ -60,11 +64,91 @@ impl<Stream: Read + Write> Write for Layer8Stream<Stream> {
             ));
         }
 
-        Ok(buf.len())
+        Ok((encrypted_written, buf.len()))
+    }
+
+    // This method is an indirection that implements the Read trait for the Layer8Stream.
+    // the output is the number of bytes we should report to the caller and the number of actual bytes read
+    // that were read from the stream and decrypted.
+    #[inline]
+    fn common_read(&mut self, buf: &mut [u8]) -> std::io::Result<(usize, usize)> {
+        let mut buf_ = Vec::new();
+        let encrypted_read_len = self.stream.read_to_end(&mut buf_)?;
+        if encrypted_read_len == 0 {
+            return Ok((0, 0));
+        }
+
+        let data_decrypted = RoundtripEnvelope::from_json_bytes(&buf_)
+            .map_err(|e| {
+                Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Failed to parse json response: {}\n Body is: {}",
+                        e,
+                        String::from_utf8_lossy(&buf_)
+                    ),
+                )
+            })?
+            .decode()
+            .map_err(|e| {
+                Error::new(std::io::ErrorKind::Other, format!("Failed to decode response: {}", e))
+            })?;
+
+        let mut temp_reader = std::io::Cursor::new(data_decrypted);
+        io::copy(&mut temp_reader, &mut self.stream)?;
+        temp_reader.seek(SeekFrom::Start(0))?;
+
+        let read_len = self.stream.read(buf)?;
+        Ok((encrypted_read_len, read_len))
+    }
+}
+
+#[cfg(not(debug_assertions))]
+impl<Stream: Read + Write> Read for Layer8Stream<Stream> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let (_, read_len) = self.common_read(buf)?;
+        Ok(read_len)
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<Stream: Read + Write + Seek> Read for Layer8Stream<Stream> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let (encrypted_read, read_len) = self.common_read(buf)?;
+        self.read_len = encrypted_read;
+        Ok(read_len)
+    }
+}
+
+#[cfg(not(debug_assertions))]
+impl<Stream: Read + Write> Write for Layer8Stream<Stream> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let (_, reported) = self.common_write(buf)?;
+        Ok(reported)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.stream.flush()
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<Stream: Read + Write + Seek> Write for Layer8Stream<Stream> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let (encrypted_written, reported) = self.common_write(buf)?;
+        self.written_len = encrypted_written;
+        Ok(reported)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<Stream: Read + Write + Seek> Seek for Layer8Stream<Stream> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.stream.seek(pos)
     }
 }
 
@@ -78,22 +162,32 @@ mod tests {
 
     #[test]
     fn test_stream() {
-        let payload = b"Hello, World!";
         let (private_key, public_key) = generate_key_pair(KeyUse::Ecdh).unwrap();
         let symmetric_key = private_key.get_ecdh_shared_secret(&public_key).unwrap();
 
-        let mut stream = Layer8Stream::new(std::io::Cursor::new(Vec::new()), symmetric_key);
-        let reported_write = stream.write(payload).unwrap();
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut stream = Layer8Stream::new_with_seekable(cursor, symmetric_key);
 
-        // we expect though the data to be encrypted the reported write was what was provided
-        assert!(reported_write == payload.len());
+        let payload = b"Hello, World!";
+
+        // write test
+        let reported_written = stream.write(payload).unwrap();
+        assert!(stream.written_len > payload.len());
+        assert_eq!(reported_written, payload.len());
+
+        // read test
+        let mut buf = vec![0u8; stream.written_len];
+        let reported_read = stream.read(&mut buf).unwrap();
 
         // we expect the stream to have data to read from and it should be the same as the payload
-        let mut read_data = Vec::new();
-        // let reported_read = stream.read(&mut read_data).unwrap();
-        // assert!(reported_read == payload.len());
+        assert!(
+            reported_read == payload.len(),
+            "Expected: {}, Got: {}",
+            payload.len(),
+            reported_read
+        );
 
-        // assert the payload is the same as the read data
-        // assert_eq!(payload, read_data.as_slice());
+        // // assert the payload is the same as the read data
+        assert_eq!(payload, buf.as_slice());
     }
 }
