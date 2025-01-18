@@ -21,11 +21,8 @@ include = [
     "CHANGELOG.md",
 ]
 
-[lib]
-crate-type = ["cdylib"]
-
-# [package.metadata.docs.rs]
-# all-features = true
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["handshake"]

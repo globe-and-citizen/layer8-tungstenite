@@ -453,6 +453,9 @@ impl LengthFormat {
 
 #[cfg(test)]
 mod tests {
+    // use layer8_primitives::crypto::{generate_key_pair, KeyUse};
+    // use layer8_primitives::types::RoundtripEnvelope;
+
     use super::*;
 
     use super::super::coding::{Data, OpCode};
@@ -492,4 +495,25 @@ mod tests {
         let view = format!("{f}");
         assert!(view.contains("payload:"));
     }
+
+    // // testing if conversion to and from is well formed for frame data
+    // #[test]
+    // fn test_frame_layer8_codec() {
+    //     let (private_key, public_key) = generate_key_pair(KeyUse::Ecdh).unwrap();
+    //     let symmetric_key = private_key.get_ecdh_shared_secret(&public_key).unwrap();
+
+    //     // using frame to encode
+    //     let envelope = {
+    //         let frame = Frame::ping("pinging from layer8");
+    //         let mut business_payload = Vec::new();
+    //         frame.format_into_buf(&mut business_payload).unwrap();
+
+    //         RoundtripEnvelope::encode(&symmetric_key.symmetric_encrypt(&business_payload).unwrap())
+    //     };
+
+    //     // using frame to decode
+    //     {
+    //         RoundtripEnvelope::decode(&self)
+    //     }
+    // }
 }

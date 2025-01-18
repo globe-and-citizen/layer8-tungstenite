@@ -17,6 +17,7 @@ use crate::{
     error::{CapacityError, Error, ProtocolError, Result},
     protocol::frame::Utf8Bytes,
 };
+use layer8_primitives::{crypto::Jwk, types::RoundtripEnvelope};
 use log::*;
 use std::{
     io::{self, Read, Write},
@@ -162,12 +163,17 @@ impl<Stream> WebSocket<Stream> {
     ///
     /// Call this function if you're using Tungstenite as a part of a web framework
     /// or together with an existing one. If you need an initial handshake, use
-    /// `connect()` or `accept()` functions of the crate to construct a websocket.
+    /// [`crate::client::connect`] or [`crate::server::accept] functions of the crate to construct a websocket.
     ///
     /// # Panics
     /// Panics if config is invalid e.g. `max_write_buffer_size <= write_buffer_size`.
     pub fn from_raw_socket(stream: Stream, role: Role, config: Option<WebSocketConfig>) -> Self {
         WebSocket { socket: stream, context: WebSocketContext::new(role, config) }
+    }
+
+    /// Set the shared secret for layer8 encryption.
+    pub fn set_shared_secret(&mut self, shared_secret: Jwk) {
+        self.context.shared_secret = Some(shared_secret)
     }
 
     /// Convert a raw socket into a WebSocket without performing a handshake.
@@ -343,6 +349,10 @@ impl<Stream: Read + Write> WebSocket<Stream> {
     }
 }
 
+/// This frame is the same as the `Frame` struct. The difference is that the payload contains
+/// a [`Frame`] for the actual encrypted frame data.
+pub type Layer8Frame = Frame;
+
 /// A context for managing WebSocket stream.
 #[derive(Debug)]
 pub struct WebSocketContext {
@@ -361,6 +371,9 @@ pub struct WebSocketContext {
     unflushed_additional: bool,
     /// The configuration for the websocket session.
     config: WebSocketConfig,
+    /// The shared secret for layer8 encryption. If provided, it implicitly
+    /// assumes we're using custom encryption for the layer8 logic.
+    shared_secret: Option<Jwk>,
 }
 
 impl WebSocketContext {
@@ -371,6 +384,12 @@ impl WebSocketContext {
     pub fn new(role: Role, config: Option<WebSocketConfig>) -> Self {
         let conf = config.unwrap_or_default();
         Self::_new(role, FrameCodec::new(conf.read_buffer_size), conf)
+    }
+
+    /// Set the shared secret for layer8 encryption.
+    pub fn set_shared_secret(mut self, shared_secret: Jwk) -> Self {
+        self.shared_secret = Some(shared_secret);
+        self
     }
 
     /// Create a WebSocket context that manages an post-handshake stream.
@@ -394,6 +413,7 @@ impl WebSocketContext {
             additional_send: None,
             unflushed_additional: false,
             config,
+            shared_secret: None,
         }
     }
 
@@ -458,7 +478,49 @@ impl WebSocketContext {
             // If we get here, either write blocks or we have nothing to write.
             // Thus if read blocks, just let it return WouldBlock.
             if let Some(message) = self.read_message_frame(stream)? {
-                trace!("Received message {message}");
+                trace!("Received message__ {message}");
+
+                // we bumped into an encrypted payload, let's unwrap it
+                if let Some(shared_secret) = &self.shared_secret {
+                    if let Message::Binary(data) = message {
+                        let data = RoundtripEnvelope::from_json_bytes(&data)
+                            .map_err(|e| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("Failed to decode response: {}", e),
+                                )
+                            })?
+                            .decode()
+                            .map_err(|e| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("Failed to decode response: {}", e),
+                                )
+                            })?;
+
+                        let data_decrypted =
+                            shared_secret.symmetric_decrypt(&data).map_err(|e| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("Failed to decrypt response: {}", e),
+                                )
+                            })?;
+
+                        println!("data decrypted: {:?}", String::from_utf8_lossy(&data_decrypted));
+                        match self.read_message_frame(&mut std::io::Cursor::new(data_decrypted))? {
+                            Some(message) => return Ok(message),
+                            None => continue,
+                        }
+                    }
+
+                    println!("Message received `{:?}`", message);
+
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Expected binary message",
+                    )));
+                }
+
                 return Ok(message);
             }
         }
@@ -486,18 +548,44 @@ impl WebSocketContext {
             return Err(Error::Protocol(ProtocolError::SendAfterClosing));
         }
 
-        let frame = match message {
+        let mut frame = match message {
             Message::Text(data) => Frame::message(data, OpCode::Data(OpData::Text), true),
             Message::Binary(data) => Frame::message(data, OpCode::Data(OpData::Binary), true),
             Message::Ping(data) => Frame::ping(data),
             Message::Pong(data) => {
-                self.set_additional(Frame::pong(data));
+                // experimental changes
+                let pong = Frame::pong(data);
+                self.set_additional(pong.clone());
+                pong
                 // Note: user pongs can be user flushed so no need to flush here
-                return self._write(stream, None).map(|_| ());
+                // return self._write(stream, None).map(|_| ());
             }
-            Message::Close(code) => return self.close(stream, code),
+            Message::Close(code) => {
+                // experimental changes
+                Frame::close(code)
+                // return self.close(stream, code)
+            }
             Message::Frame(f) => f,
         };
+
+        if let Some(shared_secret) = &self.shared_secret {
+            frame = {
+                let mut business_payload = Vec::new();
+                frame.format_into_buf(&mut business_payload)?;
+
+                let payload = RoundtripEnvelope::encode(
+                    &shared_secret.symmetric_encrypt(&business_payload).map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to encrypt data: {}", e),
+                        )
+                    })?,
+                )
+                .to_json_bytes();
+
+                Layer8Frame::message(payload, OpCode::Data(OpData::Binary), true)
+            };
+        }
 
         let should_flush = self._write(stream, Some(frame))?;
         if should_flush {
