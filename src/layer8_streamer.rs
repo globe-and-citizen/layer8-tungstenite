@@ -3,7 +3,7 @@
 //!
 //! This streamer is expected to be used by server middleware implementations when intercepting the stream.
 
-use std::io::{self, Cursor, Error, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Error, Read, Seek, Write};
 
 use layer8_primitives::crypto::Jwk;
 use layer8_primitives::types::RoundtripEnvelope;
@@ -33,23 +33,23 @@ impl<Stream> Layer8Streamer<Stream> {
 }
 
 impl<Stream: Read + Write> Layer8Streamer<Stream> {
-    /// TODO
+    /// Read a message from the stream, if possible.
     pub fn read(&mut self) -> std::io::Result<Option<Message>> {
         self.read_message()
     }
 
-    /// TODO
+    /// Send a message to the stream, if possible.
     pub fn send(&mut self, message: Message) -> std::io::Result<()> {
         self.write_message(message)?;
         Ok(_ = self.frame_socket.flush())
     }
 
-    /// TODO
+    /// Write a message to the stream, if possible.
     pub fn write(&mut self, message: Message) -> std::io::Result<()> {
         self.write_message(message)
     }
 
-    /// TODO
+    /// Flush the stream, if possible.
     pub fn flush(&mut self) -> std::io::Result<()> {
         self.frame_socket.flush().map_err(|e| {
             Error::new(std::io::ErrorKind::Other, format!("Failed to flush frame socket: {}", e))
@@ -68,6 +68,9 @@ impl<Stream: Read + Write> Layer8Streamer<Stream> {
 
         // if frame requires encryption, we encrypt it
         let frame = if let Some(secret_key) = &self.shared_secret {
+            // todo: rm
+            println!("encrypting frame: {}", String::from_utf8_lossy(frame.payload()));
+
             let mut frame_buf = Vec::new();
             frame.format_into_buf(&mut frame_buf).map_err(|e| {
                 Error::new(std::io::ErrorKind::Other, format!("Failed to format frame: {}", e))
@@ -80,6 +83,8 @@ impl<Stream: Read + Write> Layer8Streamer<Stream> {
             )
             .to_json_bytes();
 
+            // todo: rm
+            println!("encrypted frame!");
             Frame::message(encrypted_payload, OpCode::Data(OpData::Binary), true)
         } else {
             frame
@@ -101,6 +106,9 @@ impl<Stream: Read + Write> Layer8Streamer<Stream> {
 
         // we expect the frame to be encrypted, unless secret is not provided
         if let Some(secret_key) = &self.shared_secret {
+            // todo: rm
+            println!("decrypting frame!");
+
             let data = RoundtripEnvelope::from_json_bytes(frame.payload())
                 .map_err(|e| {
                     Error::new(
@@ -133,49 +141,48 @@ impl<Stream: Read + Write> Layer8Streamer<Stream> {
                     ))
                 }
             };
+
+            // todo: rm
+            println!("decrypted frame: {:?}", String::from_utf8_lossy(frame.payload()));
         }
 
         Ok(Some(Message::Frame(frame)))
     }
 }
 
+impl<Stream: Seek> Seek for Layer8Streamer<Stream> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.frame_socket.get_mut().seek(pos)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::io::{Seek, SeekFrom};
+
+    use bytes::Bytes;
 
     use layer8_primitives::crypto::{generate_key_pair, KeyUse};
 
-    use crate::layer8_client::Layer8Streamer;
+    use crate::layer8_streamer::Layer8Streamer;
 
     #[test]
     fn test_stream() {
+        env_logger::init();
+
         let (private_key, public_key) = generate_key_pair(KeyUse::Ecdh).unwrap();
         let symmetric_key = private_key.get_ecdh_shared_secret(&public_key).unwrap();
 
         let cursor = std::io::Cursor::new(Vec::new());
         let mut stream = Layer8Streamer::new(cursor, Some(symmetric_key));
 
-        let payload = b"Hello, World!";
+        let payload = Bytes::from(b"Hello, World!".to_vec());
 
-        // write test
-        let reported_written = stream.write(payload).unwrap();
-        assert!(stream.written_len > payload.len());
-        assert_eq!(reported_written, payload.len());
+        stream.write(crate::Message::Ping(payload.clone())).unwrap();
+        stream.seek(SeekFrom::Start(0)).unwrap(); // necessary for the cursor to read from the beginning
 
         // read test
-        stream.seek(SeekFrom::Start(0)).unwrap();
-        let mut buf = vec![0u8; stream.written_len]; // This information is provided by the websocket header in actual implementation.
-        let reported_read = stream.read(&mut buf).unwrap();
-
-        // we expect the stream to have data to read from and it should be the same as the payload
-        assert!(
-            reported_read == payload.len(),
-            "Expected: {}, Got: {}",
-            payload.len(),
-            reported_read
-        );
-
-        // assert the payload is the same as the read data
-        assert_eq!(payload, &buf[..reported_read]);
+        let msg = stream.read_message().unwrap().unwrap();
+        matches!(msg, crate::Message::Ping(data) if data.eq(&payload));
     }
 }
