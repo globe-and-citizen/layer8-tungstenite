@@ -478,7 +478,7 @@ impl WebSocketContext {
             // If we get here, either write blocks or we have nothing to write.
             // Thus if read blocks, just let it return WouldBlock.
             if let Some(message) = self.read_message_frame(stream)? {
-                trace!("Received message__ {message}");
+                trace!("Received message {message}");
 
                 // we bumped into an encrypted payload, let's unwrap it
                 if let Some(shared_secret) = &self.shared_secret {
@@ -512,8 +512,6 @@ impl WebSocketContext {
                             None => continue,
                         }
                     }
-
-                    println!("Message received `{:?}`", message);
 
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
