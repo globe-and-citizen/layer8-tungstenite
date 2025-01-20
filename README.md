@@ -1,5 +1,12 @@
 # Layer8 Tungstenite
 
+---
+**NOTE**
+
+This is a fork of <https://github.com/snapview/tungstenite-rs> and we are indebted to the work they are doing
+
+---
+
 Lightweight stream-based WebSocket implementation for [Rust](https://www.rust-lang.org/).
 
 ```rust

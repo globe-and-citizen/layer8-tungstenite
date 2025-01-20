@@ -1,9 +1,4 @@
 #![cfg(feature = "handshake")]
-use std::{
-    net::TcpListener,
-    thread::{sleep, spawn},
-    time::Duration,
-};
 use layer8_tungstenite::{
     accept_hdr, connect,
     error::{Error, ProtocolError, SubProtocolError},
@@ -11,6 +6,11 @@ use layer8_tungstenite::{
         client::generate_key,
         server::{Request, Response},
     },
+};
+use std::{
+    net::TcpListener,
+    thread::{sleep, spawn},
+    time::Duration,
 };
 
 fn create_http_request(uri: &str, subprotocols: Option<Vec<String>>) -> http::Request<()> {

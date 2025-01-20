@@ -1,10 +1,10 @@
 //! Benchmarks for read performance.
 use criterion::{BatchSize, Criterion};
+use layer8_tungstenite::{protocol::Role, Message, WebSocket};
 use std::{
     io::{self, Read, Write},
     sync::{Arc, Mutex},
 };
-use layer8_tungstenite::{protocol::Role, Message, WebSocket};
 
 /// Mock stream with no artificial delays.
 #[derive(Default, Clone)]

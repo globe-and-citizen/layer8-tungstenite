@@ -1,6 +1,10 @@
 #![cfg(feature = "handshake")]
 #![cfg(feature = "url")]
 
+use layer8_tungstenite::{
+    accept_hdr, connect,
+    handshake::server::{Request, Response},
+};
 use std::{
     assert,
     net::TcpListener,
@@ -8,10 +12,6 @@ use std::{
     process::exit,
     thread::{sleep, spawn},
     time::Duration,
-};
-use layer8_tungstenite::{
-    accept_hdr, connect,
-    handshake::server::{Request, Response},
 };
 
 /// Test for write buffering and flushing behaviour.

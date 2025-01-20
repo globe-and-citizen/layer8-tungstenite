@@ -11,7 +11,6 @@ homepage = "https://github.com/globe-and-citizen/layer8-tungstenite"
 repository = "https://github.com/globe-and-citizen/layer8-tungstenite"
 version = "0.26.1"                                                     # Keeping up with the upstream changes
 edition = "2021"
-# rust-version = "1.63"
 include = [
     "benches/**/*",
     "src/**/*",

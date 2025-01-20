@@ -3,8 +3,10 @@ use std::{
     thread::spawn,
 };
 
+use layer8_tungstenite::{
+    accept, handshake::HandshakeRole, Error, HandshakeError, Message, Result,
+};
 use log::*;
-use layer8_tungstenite::{accept, handshake::HandshakeRole, Error, HandshakeError, Message, Result};
 
 fn must_not_block<Role: HandshakeRole>(err: HandshakeError<Role>) -> Error {
     match err {

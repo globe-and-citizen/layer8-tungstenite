@@ -8,7 +8,6 @@ use layer8_tungstenite::{accept, connect, Message};
 
 #[test]
 fn ping() {
-    env_logger::init();
     let (private_key, public_key) = generate_key_pair(KeyUse::Ecdh).unwrap();
     let symmetric_key = private_key.get_ecdh_shared_secret(&public_key).unwrap();
 
