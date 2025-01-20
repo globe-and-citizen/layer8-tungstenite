@@ -1,5 +1,5 @@
-use std::io::{self, Read, Write};
 use layer8_tungstenite::{protocol::WebSocketConfig, Message, WebSocket};
+use std::io::{self, Read, Write};
 
 /// `Write` impl that records call stats and drops the data.
 #[derive(Debug, Default)]

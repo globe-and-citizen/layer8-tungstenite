@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use socket2::Socket;
 use layer8_tungstenite::{accept, connect, stream::MaybeTlsStream, Error, Message, WebSocket};
+use socket2::Socket;
 
 type Sock = WebSocket<MaybeTlsStream<TcpStream>>;
 

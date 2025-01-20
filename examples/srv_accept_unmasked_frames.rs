@@ -1,9 +1,9 @@
-use std::{net::TcpListener, thread::spawn};
 use layer8_tungstenite::{
     accept_hdr_with_config,
     handshake::server::{Request, Response},
     protocol::WebSocketConfig,
 };
+use std::{net::TcpListener, thread::spawn};
 
 fn main() {
     env_logger::init();

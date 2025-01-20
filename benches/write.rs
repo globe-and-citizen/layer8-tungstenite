@@ -1,10 +1,10 @@
 //! Benchmarks for write performance.
 use criterion::Criterion;
+use layer8_tungstenite::{protocol::Role, Message, WebSocket};
 use std::{
     hint, io,
     time::{Duration, Instant},
 };
-use layer8_tungstenite::{protocol::Role, Message, WebSocket};
 
 const MOCK_WRITE_LEN: usize = 8 * 1024 * 1024;
 

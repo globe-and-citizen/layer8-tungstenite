@@ -1,16 +1,16 @@
 #![cfg(feature = "handshake")]
 
 use http::Uri;
+use layer8_tungstenite::{
+    accept_hdr, connect,
+    handshake::server::{Request, Response},
+    ClientRequestBuilder, Error, Message,
+};
 use std::{
     net::TcpListener,
     process::exit,
     thread::{sleep, spawn},
     time::Duration,
-};
-use layer8_tungstenite::{
-    accept_hdr, connect,
-    handshake::server::{Request, Response},
-    ClientRequestBuilder, Error, Message,
 };
 
 /// Test for write buffering and flushing behaviour.
