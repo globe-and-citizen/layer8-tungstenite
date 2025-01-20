@@ -509,7 +509,7 @@ impl WebSocketContext {
                         println!("data decrypted: {:?}", String::from_utf8_lossy(&data_decrypted));
                         match self.read_message_frame(&mut std::io::Cursor::new(data_decrypted))? {
                             Some(message) => return Ok(message),
-                            None => continue,
+                            None => unimplemented!("Report Bug to Layer8 team!"),
                         }
                     }
 
