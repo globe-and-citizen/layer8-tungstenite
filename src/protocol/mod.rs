@@ -486,10 +486,10 @@ impl WebSocketContext {
                 // we bumped into an encrypted payload, let's unwrap it
                 //
                 if let Message::Binary(data) = &message {
-                    if serde_json::from_slice::<WebSocketPayload>(&data).is_ok() {
+                    if serde_json::from_slice::<WebSocketPayload>(data).is_ok() {
                         // noop
                     } else if let Some(shared_secret) = &self.shared_secret {
-                        let data = RoundtripEnvelope::from_json_bytes(&data)
+                        let data = RoundtripEnvelope::from_json_bytes(data)
                             .map_err(|e| {
                                 std::io::Error::new(
                                     std::io::ErrorKind::Other,
