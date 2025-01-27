@@ -17,7 +17,10 @@ use crate::{
     error::{CapacityError, Error, ProtocolError, Result},
     protocol::frame::Utf8Bytes,
 };
-use layer8_primitives::{crypto::Jwk, types::RoundtripEnvelope};
+use layer8_primitives::{
+    crypto::Jwk,
+    types::{RoundtripEnvelope, WebSocketPayload},
+};
 use log::*;
 use std::{
     io::{self, Read, Write},
@@ -481,8 +484,11 @@ impl WebSocketContext {
                 trace!("Received message {message}");
 
                 // we bumped into an encrypted payload, let's unwrap it
-                if let Some(shared_secret) = &self.shared_secret {
-                    if let Message::Binary(data) = message {
+                //
+                if let Message::Binary(data) = &message {
+                    if serde_json::from_slice::<WebSocketPayload>(&data).is_ok() {
+                        // noop
+                    } else if let Some(shared_secret) = &self.shared_secret {
                         let data = RoundtripEnvelope::from_json_bytes(&data)
                             .map_err(|e| {
                                 std::io::Error::new(
@@ -512,11 +518,6 @@ impl WebSocketContext {
                             None => unimplemented!("Report Bug to Layer8 team!"),
                         }
                     }
-
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Expected binary message",
-                    )));
                 }
 
                 return Ok(message);
@@ -548,7 +549,21 @@ impl WebSocketContext {
 
         let mut frame = match message {
             Message::Text(data) => Frame::message(data, OpCode::Data(OpData::Text), true),
-            Message::Binary(data) => Frame::message(data, OpCode::Data(OpData::Binary), true),
+            Message::Binary(data) => {
+                // if we get WebSocketPayload, send frame as is; we need metadata plaintext
+                if serde_json::from_slice::<WebSocketPayload>(&data).is_ok() {
+                    let should_flush = self._write(
+                        stream,
+                        Some(Frame::message(data, OpCode::Data(OpData::Binary), true)),
+                    )?;
+                    if should_flush {
+                        self.flush(stream)?;
+                    }
+                    return Ok(());
+                }
+
+                Frame::message(data, OpCode::Data(OpData::Binary), true)
+            }
             Message::Ping(data) => Frame::ping(data),
             Message::Pong(data) => {
                 // experimental changes
@@ -567,10 +582,9 @@ impl WebSocketContext {
         };
 
         if let Some(shared_secret) = &self.shared_secret {
+            let mut business_payload = Vec::new();
+            frame.format_into_buf(&mut business_payload)?;
             frame = {
-                let mut business_payload = Vec::new();
-                frame.format_into_buf(&mut business_payload)?;
-
                 let payload = RoundtripEnvelope::encode(
                     &shared_secret.symmetric_encrypt(&business_payload).map_err(|e| {
                         std::io::Error::new(
