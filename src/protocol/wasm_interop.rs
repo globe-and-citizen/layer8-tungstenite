@@ -1,3 +1,5 @@
+//! This module contains the implementation of the WebSocket interop for the WebAssembly target.
+
 use js_sys::{ArrayBuffer, Function, Object, Uint8Array};
 use wasm_bindgen::prelude::*;
 use web_sys::{BinaryType, Blob, WebSocket as BrowserWebSocket};
