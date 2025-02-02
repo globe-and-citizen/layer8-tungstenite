@@ -9,7 +9,7 @@ readme = "README.md"
 homepage = "https://github.com/globe-and-citizen/layer8-tungstenite"
 # documentation = "https://docs.rs/layer8-tungstenite/0.26.1"
 repository = "https://github.com/globe-and-citizen/layer8-tungstenite"
-version = "0.26.1"                                                     # Keeping up with the upstream changes
+version = "0.26.1" # Keeping up with the upstream changes
 edition = "2021"
 include = [
     "benches/**/*",
@@ -47,6 +47,14 @@ utf-8 = "0.7.5"
 getrandom = { version = "0.2", features = ["js"] }
 layer8-primitives = { git = "https://github.com/globe-and-citizen/layer8-primitives-rs", branch = "add/websocket-data-wrapper" }
 serde_json = "1.0.137"
+web-sys = { version = "0.3", features = [
+    "WebSocket",
+    "BinaryType",
+    "Blob",
+    "FileReader",
+] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 
 [package.metadata.cargo-machete]
 ignored = ["getrandom"] # Need the "js" flag for wasm builds

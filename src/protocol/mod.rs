@@ -2,6 +2,8 @@
 
 pub mod frame;
 
+pub mod wasm_interop;
+
 mod message;
 
 pub use self::{frame::CloseFrame, message::Message};
