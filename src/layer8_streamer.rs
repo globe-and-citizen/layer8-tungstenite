@@ -3,14 +3,12 @@
 //!
 //! This streamer is expected to be used by server middleware implementations when intercepting the stream.
 
-use std::io::{Cursor, Error, Read, Seek, Write};
+use std::io::{Error, Read, Seek, Write};
 
 use layer8_primitives::crypto::Jwk;
 use layer8_primitives::types::RoundtripEnvelope;
 
-use crate::protocol::frame::coding::{Data as OpData, OpCode};
-use crate::protocol::frame::{Frame, FrameSocket};
-use crate::Message;
+const MAX_READ_LIMIT: u64 = 1024 * 1024 * 1024; // 1GB Default
 
 /// This streamer provides an indirection over the actual provided stream implementation. With the indirection we are able
 /// to plug in custom logic for our layer8 needs.
@@ -19,7 +17,7 @@ use crate::Message;
 #[derive(Debug)]
 pub struct Layer8Streamer<Stream> {
     /// The actual stream that we are wrapping.
-    frame_socket: FrameSocket<Stream>,
+    stream: Stream,
     /// The shared secret used to encrypt and decrypt the data, if provided.
     shared_secret: Option<Jwk>,
 }
@@ -27,99 +25,60 @@ pub struct Layer8Streamer<Stream> {
 impl<Stream> Layer8Streamer<Stream> {
     /// Create a new Layer8Stream with the provided stream and shared secret.
     pub fn new(stream: Stream, shared_secret: Option<Jwk>) -> Self {
-        let frame_socket = FrameSocket::new(stream);
-        Layer8Streamer { frame_socket, shared_secret }
+        Layer8Streamer { stream, shared_secret }
     }
 
     /// Get a reference to the underlying stream.
     pub fn get_ref(&self) -> &Stream {
-        self.frame_socket.get_ref()
+        &self.stream
     }
 
     /// Get a mutable reference to the underlying stream.
     pub fn get_mut(&mut self) -> &mut Stream {
-        self.frame_socket.get_mut()
+        &mut self.stream
     }
 }
 
 impl<Stream: Read + Write> Layer8Streamer<Stream> {
     /// Read a message from the stream, if possible.
-    pub fn read(&mut self) -> std::io::Result<Option<Message>> {
-        self.read_message()
-    }
-
-    /// Send a message to the stream, if possible.
-    pub fn send(&mut self, message: Message) -> std::io::Result<()> {
-        self.write_message(message)?;
-        Ok(_ = self.frame_socket.flush())
+    pub fn read(&mut self, read_limit: Option<u64>) -> std::io::Result<Option<Vec<u8>>> {
+        self.read_message(read_limit)
     }
 
     /// Write a message to the stream, if possible.
-    pub fn write(&mut self, message: Message) -> std::io::Result<()> {
+    pub fn write(&mut self, message: &[u8]) -> std::io::Result<()> {
         self.write_message(message)
     }
 
-    /// Flush the stream, if possible.
-    pub fn flush(&mut self) -> std::io::Result<()> {
-        self.frame_socket.flush().map_err(|e| {
-            Error::new(std::io::ErrorKind::Other, format!("Failed to flush frame socket: {}", e))
-        })
-    }
-
-    fn write_message(&mut self, message: Message) -> std::io::Result<()> {
-        let frame = match message {
-            Message::Text(data) => Frame::message(data, OpCode::Data(OpData::Text), true),
-            Message::Binary(data) => Frame::message(data, OpCode::Data(OpData::Binary), true),
-            Message::Ping(data) => Frame::ping(data),
-            Message::Pong(data) => Frame::pong(data),
-            Message::Close(code) => Frame::close(code),
-            Message::Frame(f) => f,
-        };
-
-        // if frame requires encryption, we encrypt it
-        let frame = if let Some(secret_key) = &self.shared_secret {
-            // todo: rm
-            println!("encrypting frame: {}", String::from_utf8_lossy(frame.payload()));
-
-            let mut frame_buf = Vec::new();
-            frame.format_into_buf(&mut frame_buf).map_err(|e| {
-                Error::new(std::io::ErrorKind::Other, format!("Failed to format frame: {}", e))
-            })?;
-
-            let encrypted_payload = RoundtripEnvelope::encode(
-                &secret_key.symmetric_encrypt(&frame_buf).map_err(|e| {
-                    Error::new(std::io::ErrorKind::Other, format!("Failed to encrypt frame: {}", e))
-                })?,
-            )
-            .to_json_bytes();
-
-            // todo: rm
-            println!("encrypted frame!");
-            Frame::message(encrypted_payload, OpCode::Data(OpData::Binary), true)
-        } else {
-            frame
-        };
-
-        self.frame_socket.write(frame).map_err(|e| {
-            Error::new(std::io::ErrorKind::Other, format!("Failed to write frame: {}", e))
-        })
-    }
-
-    fn read_message(&mut self) -> std::io::Result<Option<Message>> {
-        // we try to read a frame from the stream, if unable but with no errors, we return 0
-        let mut frame = match self.frame_socket.read(None).map_err(|e| {
-            Error::new(std::io::ErrorKind::Other, format!("Failed to read frame: {}", e))
-        })? {
-            Some(frame) => frame,
-            None => return Ok(None),
-        };
-
-        // we expect the frame to be encrypted, unless secret is not provided
+    fn write_message(&mut self, message: &[u8]) -> std::io::Result<()> {
+        let mut message = message.to_vec();
         if let Some(secret_key) = &self.shared_secret {
-            // todo: rm
-            println!("decrypting frame!");
+            message =
+                RoundtripEnvelope::encode(&secret_key.symmetric_encrypt(&message).map_err(|e| {
+                    Error::new(std::io::ErrorKind::Other, format!("Failed to encrypt frame: {}", e))
+                })?)
+                .to_json_bytes()
+        }
 
-            let data = RoundtripEnvelope::from_json_bytes(frame.payload())
+        self.stream
+            .write(&message)
+            .map_err(|e| {
+                Error::new(std::io::ErrorKind::Other, format!("Failed to write message: {}", e))
+            })
+            .map(|_| ())
+    }
+
+    fn read_message(&mut self, read_limit: Option<u64>) -> std::io::Result<Option<Vec<u8>>> {
+        let mut data = Vec::new();
+        {
+            let stream_ref = std::io::Read::by_ref(&mut self.stream);
+            stream_ref.take(read_limit.unwrap_or(MAX_READ_LIMIT)).read_to_end(&mut data)?;
+            // drop our &mut stream_ref so we can use f again
+        }
+
+        // we expect the data to be encrypted, unless secret is not provided
+        if let Some(secret_key) = &self.shared_secret {
+            let data_ = RoundtripEnvelope::from_json_bytes(&data)
                 .map_err(|e| {
                     Error::new(
                         std::io::ErrorKind::Other,
@@ -134,43 +93,24 @@ impl<Stream: Read + Write> Layer8Streamer<Stream> {
                     )
                 })?;
 
-            let data_decrypted = secret_key.symmetric_decrypt(&data).map_err(|e| {
+            data = secret_key.symmetric_decrypt(&data_).map_err(|e| {
                 Error::new(std::io::ErrorKind::Other, format!("Failed to decrypt response: {}", e))
             })?;
-
-            // reading the nested frame
-            let mut frame_socket = FrameSocket::new(Cursor::new(data_decrypted));
-            frame = match frame_socket.read(None).map_err(|e| {
-                Error::new(std::io::ErrorKind::Other, format!("Failed to read frame: {}", e))
-            })? {
-                Some(frame) => frame,
-                None => {
-                    return Err(Error::new(
-                        std::io::ErrorKind::Other,
-                        "Failed to read nested frame".to_string(),
-                    ))
-                }
-            };
-
-            // todo: rm
-            println!("decrypted frame: {:?}", String::from_utf8_lossy(frame.payload()));
         }
 
-        Ok(Some(Message::Frame(frame)))
+        Ok(Some(data))
     }
 }
 
 impl<Stream: Seek> Seek for Layer8Streamer<Stream> {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.frame_socket.get_mut().seek(pos)
+        self.stream.seek(pos)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{Seek, SeekFrom};
-
-    use bytes::Bytes;
 
     use layer8_primitives::crypto::{generate_key_pair, KeyUse};
 
@@ -184,13 +124,13 @@ mod tests {
         let cursor = std::io::Cursor::new(Vec::new());
         let mut stream = Layer8Streamer::new(cursor, Some(symmetric_key));
 
-        let payload = Bytes::from(b"Hello, World!".to_vec());
+        let payload = b"Hello, World!";
 
-        stream.write(crate::Message::Ping(payload.clone())).unwrap();
+        stream.write(payload).unwrap();
         stream.seek(SeekFrom::Start(0)).unwrap(); // necessary for the cursor to read from the beginning
 
         // read test
-        let msg = stream.read_message().unwrap().unwrap();
-        matches!(msg, crate::Message::Ping(data) if data.eq(&payload));
+        let msg = stream.read_message(None).unwrap().unwrap();
+        matches!(msg, data if data.eq(&payload));
     }
 }
