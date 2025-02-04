@@ -35,6 +35,11 @@ impl<Stream> Layer8Streamer<Stream> {
     pub fn get_ref(&self) -> &Stream {
         self.frame_socket.get_ref()
     }
+
+    /// Get a mutable reference to the underlying stream.
+    pub fn get_mut(&mut self) -> &mut Stream {
+        self.frame_socket.get_mut()
+    }
 }
 
 impl<Stream: Read + Write> Layer8Streamer<Stream> {
