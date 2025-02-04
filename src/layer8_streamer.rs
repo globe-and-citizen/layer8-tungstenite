@@ -30,6 +30,11 @@ impl<Stream> Layer8Streamer<Stream> {
         let frame_socket = FrameSocket::new(stream);
         Layer8Streamer { frame_socket, shared_secret }
     }
+
+    /// Get a reference to the underlying stream.
+    pub fn get_ref(&self) -> &Stream {
+        self.frame_socket.get_ref()
+    }
 }
 
 impl<Stream: Read + Write> Layer8Streamer<Stream> {
